@@ -1,13 +1,21 @@
 {
   "name": "auto-contrast-color",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Automatically determine a contrasting text color (black or white) for any given background color.",
   "main": "dist/index.cjs",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build:esm": "esbuild src/index.ts --bundle --outfile=dist/index.mjs --format=esm --platform=node --external:tinycolor2",

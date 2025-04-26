@@ -22,32 +22,63 @@ function getRelativeLuminance(rgb: tinycolor.ColorFormats.RGB): number {
 }
 
 /**
+ * 定义颜色生成策略的类型
+ */
+export type ColorStrategy =
+    | 'accessibility' // 亮度优先 (黑/白)
+    | 'analogous'     // 同类色 (色相 +/- 15度)
+    | 'adjacent'      // 邻近色 (色相 +/- 60度)
+    | 'contrast'      // 对比色 (色相 +/- 120度)
+    | 'complementary' // 互补色 (色相 180度)
+    | 'custom';       // 自定义旋转度数
+
+/**
  * getContrastTextColor 函数的选项接口
  */
 export interface ContrastColorOptions {
     /**
-     * 用于判断背景是亮色还是暗色的亮度阈值 (0-1)。
-     * 默认为 0.5。较高的值倾向于黑色文本，较低的值倾向于白色文本。
+     * 用于确定文本颜色的策略。
+     * - 'accessibility': (默认) 优先保证亮度对比度，在 'lightColor'/'darkColor' 之间选择。
+     * - 'analogous': 同类色 (旋转色相 +15 度)。
+     * - 'adjacent': 邻近色 (旋转色相 +60 度)。
+     * - 'contrast': 对比色 (旋转色相 +120 度)。
+     * - 'complementary': 互补色 (旋转色相 180 度)。
+     * - 'custom': 自定义旋转度数。
+     * 注意：除 'accessibility' 外，其他策略不保证 WCAG 对比度。对于无色相颜色 (黑/白/灰)，旋转策略会回退到 'accessibility' 行为。
+     * @default 'accessibility'
+     */
+    strategy?: ColorStrategy;
+    /**
+     * [策略: 'accessibility'] 用于判断背景是亮色还是暗色的亮度阈值 (0-1)。
+     * 默认为 0.5。
      */
     threshold?: number;
     /**
-     * 为暗色背景返回的颜色。默认为 '#FFFFFF'。
+     * [策略: 'accessibility'] 为暗色背景返回的颜色。也是其他策略在处理无色相背景时的回退色。默认为 '#FFFFFF'。
      */
     lightColor?: string;
     /**
-     * 为亮色背景返回的颜色。默认为 '#000000'。
+     * [策略: 'accessibility'] 为亮色背景返回的颜色。也是其他策略在处理无色相背景时的回退色。默认为 '#000000'。
      */
     darkColor?: string;
+    /**
+     * [策略: 色相旋转类] 旋转方向。'clockwise' (顺时针) 或 'counterClockwise' (逆时针)。
+     * @default 'clockwise'
+     */
+    direction?: 'clockwise' | 'counterClockwise';
+    /**
+     * [策略: 'custom'] 自定义的色相旋转度数。
+     * @default 0
+     */
+    customDegree?: number;
 }
 
 /**
- * 根据给定的背景色确定对比强烈的文本颜色（默认为黑色或白色）。
- * 使用 WCAG 相对亮度计算方法。
+ * 根据给定的背景色和策略确定合适的文本颜色。
  *
- * @param backgroundColor - 背景色字符串，可以是 tinycolor2 支持的任何格式（HEX, RGB, HSL, 颜色名称等）。
- * @param options - 可选的配置对象，用于设置阈值和输出颜色。
- * @returns 对比强烈的文本颜色字符串（例如 '#000000' 或 '#FFFFFF'）。
- *          如果输入颜色无效，则返回 darkColor（默认为 '#000000'）。
+ * @param backgroundColor - 背景色字符串。
+ * @param options - 可选的配置对象。
+ * @returns 计算出的文本颜色字符串。如果输入颜色无效，则返回 options.darkColor。
  */
 export function getContrastTextColor(
     backgroundColor: string | tinycolor.ColorInput,
@@ -55,44 +86,85 @@ export function getContrastTextColor(
 ): string {
     const color = tinycolor(backgroundColor);
 
-    // 解构选项，并提供默认值
     const {
+        strategy = 'accessibility',
         threshold = 0.5,
         lightColor = '#FFFFFF',
-        darkColor = '#000000'
+        darkColor = '#000000',
+        direction = 'clockwise', // 默认顺时针
+        customDegree = 0 // 默认自定义度数为 0
     } = options;
 
-    // 检查输入颜色是否有效
     if (!color.isValid()) {
-        console.warn(`无效的背景色输入: "${backgroundColor}"。将返回默认深色。`);
+        console.warn(`无效的背景色输入: "${backgroundColor}"。将返回默认深色 (${darkColor})。`);
         return darkColor;
     }
 
-    // 处理 Alpha 透明度：如果存在且显著，假设背景是白色
-    // 更健壮的方案可能需要接受一个底层颜色参数。
-    // 为简单起见，如果 alpha 小于 1，先与白色混合再计算亮度。
+    let processedColor = color;
     let rgb = color.toRgb();
     const originalAlpha = rgb.a;
 
     if (originalAlpha < 1 && originalAlpha > 0) {
-        // 与白色背景混合
-        const mixedColor = tinycolor.mix('#FFFFFF', color, (1 - originalAlpha) * 100);
-        rgb = mixedColor.toRgb();
-        // 注意：亮度计算技术上不使用 alpha，
-        // 但*感知*颜色会改变，因此先混合。
+        processedColor = tinycolor.mix('#FFFFFF', color, (1 - originalAlpha) * 100);
+        rgb = processedColor.toRgb();
     } else if (originalAlpha === 0) {
-        // 完全透明 - 无法确定对比度，除非知道背后是什么。
-        // 在许多 UI 中，默认使用深色文本可能最安全，但这有争议。
-        console.warn(`背景色 "${backgroundColor}" 完全透明。无法可靠地确定对比度。将返回默认深色。`);
+        console.warn(`背景色 "${backgroundColor}" 完全透明。无法可靠地确定颜色。将返回默认深色 (${darkColor})。`);
         return darkColor;
     }
 
-    // 计算（可能是混合后的）颜色的相对亮度
-    const luminance = getRelativeLuminance(rgb);
+    // 对于需要旋转色相的策略，先检查背景色是否为无色相 (黑/白/灰)
+    // 通过检查饱和度 (Saturation) 是否为 0 来判断
+    const hsl = processedColor.toHsl();
+    const isAchromatic = hsl.s === 0; // 饱和度为 0 表示无色相
 
-    // 根据亮度阈值返回对比色
-    return luminance > threshold ? darkColor : lightColor;
+    // --- 根据策略选择计算方法 ---
+    switch (strategy) {
+        case 'analogous':
+        case 'adjacent':
+        case 'contrast':
+        case 'complementary':
+        case 'custom':
+            // 回退到 accessibility 的条件:
+            // 1. 背景是无色相 (黑/白/灰)
+            // 2. 策略是 'complementary' 且背景是纯黑或纯白 (避免互补色是自身)
+            const processedHex = processedColor.toHexString();
+            if (isAchromatic ||
+                (strategy === 'complementary' && (processedHex === '#000000' || processedHex === '#ffffff')))
+            {
+                if (isAchromatic) {
+                    console.log(`背景色 ${processedHex} 无色相，策略 '${strategy}' 回退到亮度对比`);
+                } else {
+                     console.log(`背景为 ${processedHex}，互补色策略强制返回亮度对比色`);
+                }
+                // 使用 accessibility 的逻辑
+                const luminanceFallback = getRelativeLuminance(rgb);
+                return luminanceFallback > threshold ? darkColor : lightColor;
+            }
+
+            // 确定基础旋转度数
+            let baseDegrees: number;
+            switch (strategy) {
+                case 'analogous':     baseDegrees = 15; break;
+                case 'adjacent':      baseDegrees = 60; break;
+                case 'contrast':      baseDegrees = 120; break;
+                case 'complementary': baseDegrees = 180; break;
+                case 'custom':        baseDegrees = customDegree || 0; break; // 使用 customDegree，若无效则为 0
+                default:              baseDegrees = 0;
+            }
+
+            // 根据方向调整最终度数
+            const finalDegrees = direction === 'counterClockwise' ? -baseDegrees : baseDegrees;
+
+            // 使用 spin 方法旋转色相
+            const spunColor = processedColor.spin(finalDegrees);
+            return spunColor.toHexString();
+
+        case 'accessibility':
+        default:
+             // 计算相对亮度并返回黑/白
+            const luminance = getRelativeLuminance(rgb);
+            return luminance > threshold ? darkColor : lightColor;
+    }
 }
 
-// 默认导出，方便使用
 export default getContrastTextColor; 
